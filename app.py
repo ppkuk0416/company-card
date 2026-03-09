@@ -54,10 +54,8 @@ FLAG_LABEL = {
     "주말_공휴일":    "주말/공휴일",
     "심야_새벽":      "심야/새벽",
     "유흥_사치성":    "유흥·사치성 업종",
-    "반복거래":       "반복거래",
     "고액_거래":      "고액 거래",
     "분할_결제":      "분할결제",
-    "사업자_다중":    "동일 사업자 다중결제",
     "전표_미처리":    "전표 미처리",
     "월한도_초과":    "월 한도 초과",
 }
@@ -174,38 +172,6 @@ def detect_suspicious(df: pd.DataFrame, merchant_col: str | None,
         flags |= matched.notna()
     return flags.tolist(), reasons.tolist()
 
-def detect_repeat(df: pd.DataFrame, amount_col: str, merchant_col: str,
-                  date_col: str, window_days: int = 7, min_count: int = 2):
-    n = len(df)
-    flags = [False] * n
-    reasons = [""] * n
-    try:
-        work = df[[date_col, amount_col, merchant_col]].copy()
-        work["_dt_"]    = pd.to_datetime(df[date_col], errors="coerce")
-        work["_amt_"]   = df[amount_col].astype(str).str.replace(",", "").str.strip()
-        work["_merch_"] = df[merchant_col].astype(str).str.strip()
-        work["_pos_"]   = range(n)
-        for (merch, amt), grp in work.groupby(["_merch_", "_amt_"]):
-            if len(grp) < min_count or merch in ("nan", "") or amt in ("nan", "0", ""):
-                continue
-            valid = grp.dropna(subset=["_dt_"]).sort_values("_dt_")
-            if len(valid) < min_count:
-                continue
-            dates = valid["_dt_"].tolist()
-            flagged_rows: set[int] = set()
-            for i in range(len(dates)):
-                for j in range(i + 1, len(dates)):
-                    if (dates[j] - dates[i]).days <= window_days:
-                        flagged_rows.add(valid.index[i])
-                        flagged_rows.add(valid.index[j])
-            for idx in flagged_rows:
-                pos = work.loc[idx, "_pos_"]
-                flags[pos] = True
-                reasons[pos] = f"반복거래({len(grp)}회/{window_days}일내)"
-    except Exception:
-        pass
-    return flags, reasons
-
 def detect_high_amount(df: pd.DataFrame, amount_col: str, threshold: int):
     amt     = pd.to_numeric(df[amount_col].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
     flags   = amt >= threshold
@@ -213,22 +179,6 @@ def detect_high_amount(df: pd.DataFrame, amount_col: str, threshold: int):
     reasons[flags] = amt[flags].apply(lambda x: f"고액거래({x:,.0f}원)")
     return flags.tolist(), reasons.tolist()
 
-def detect_biz_reg_multi(df: pd.DataFrame, biz_reg_col: str, merchant_col: str | None):
-    """동일 사업자등록번호로 가맹점명이 2개 이상 → 허위/중복 가맹점 의심"""
-    biz   = df[biz_reg_col].astype(str).str.strip()
-    invalid = {"", "nan", "None", "0", "-", "000-00-00000", "000000000"}
-    valid_biz = ~biz.isin(invalid) & (biz.str.replace("-", "", regex=False).str.len() >= 9)
-    flags   = pd.Series(False, index=df.index)
-    reasons = pd.Series("", index=df.index, dtype=str)
-    if not merchant_col:
-        return flags.tolist(), reasons.tolist()
-    merch = df[merchant_col].astype(str).str.strip()
-    work  = pd.DataFrame({"_biz_": biz, "_merch_": merch})
-    n_distinct = work[valid_biz].groupby("_biz_")["_merch_"].nunique()
-    distinct_map = biz.map(n_distinct).fillna(0)
-    flags   = valid_biz & (distinct_map >= 2)
-    reasons[flags] = ("동일사업자 다른가맹점(" + distinct_map[flags].astype(int).astype(str) + "개)")
-    return flags.tolist(), reasons.tolist()
 
 def detect_slip_unprocessed(df: pd.DataFrame, slip_col: str):
     """전표처리 컬럼이 '미처리'인 행 탐지"""
@@ -298,13 +248,6 @@ def main():
 
         use_suspicious = st.checkbox("유흥·사치성 업종 탐지", value=True)
 
-        use_repeat = st.checkbox("반복거래 탐지", value=True)
-        if use_repeat:
-            repeat_window = st.slider("반복 탐지 기간 (일)", 1, 30, 7)
-            repeat_min    = st.slider("반복 최소 횟수", 2, 5, 2)
-        else:
-            repeat_window, repeat_min = 7, 2
-
         use_high_amount = st.checkbox("고액 거래 탐지", value=False)
         if use_high_amount:
             high_amount_threshold = st.number_input(
@@ -326,11 +269,6 @@ def main():
 
         st.divider()
         st.subheader("🏢 추가 탐지 (iUERP 전용)")
-        use_biz_reg = st.checkbox(
-            "동일 사업자번호 다중 가맹점 탐지",
-            value=True,
-            help="같은 사업자등록번호로 가맹점명이 2개 이상 → 허위/중복 가맹점 의심",
-        )
         use_slip = st.checkbox(
             "전표 미처리 탐지",
             value=True,
@@ -588,13 +526,6 @@ def main():
             _result["분할_결제"] = f
             _result["분할_결제_사유"] = r
             _flag_cols.append("분할_결제")
-
-        if use_biz_reg and biz_reg_col:
-            progress.progress(91, text="동일 사업자번호 다중 가맹점 탐지 중...")
-            f, r = detect_biz_reg_multi(_result, biz_reg_col, merchant_col)
-            _result["사업자_다중"] = f
-            _result["사업자_다중_사유"] = r
-            _flag_cols.append("사업자_다중")
 
         if use_slip and slip_status_col:
             progress.progress(93, text="전표 미처리 탐지 중...")
