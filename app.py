@@ -433,30 +433,66 @@ def main():
     st.header("2️⃣ 컬럼 매핑")
     auto = auto_detect_columns(df.columns.tolist())
     opts = ["(사용 안함)"] + df.columns.tolist()
-    with st.expander("컬럼 매핑 확인 / 수정", expanded=True):
-        st.caption("📌 더존 iUERP 내보내기 파일을 사용하면 자동 감지됩니다.")
+
+    # 더존 iU ERP 정확한 컬럼명 프리셋
+    _DOOJOHN_PRESET = {
+        "sel_date": "승인일자", "sel_time": "(사용 안함)",
+        "sel_amount": "승인금액", "sel_merchant": "가맹점",
+        "sel_category": "업종", "sel_card": "법인카드",
+        "sel_user": "소유자", "sel_dept": "관리부서",
+        "sel_approval_type": "구분", "sel_approval_no": "승인번호",
+        "sel_biz_reg": "사업자등록번호", "sel_supply_amt": "공급가액",
+        "sel_vat": "부가세", "sel_service_fee": "봉사료",
+        "sel_cost_center": "코스트센터명", "sel_account_name": "상대계정명",
+        "sel_slip_status": "전표처리",
+    }
+
+    # 매핑 상태 뱃지
+    detected = sum(1 for v in auto.values() if v)
+    total = len(auto)
+    _pct = detected / total
+    _badge_cols = st.columns([3, 1])
+    with _badge_cols[0]:
+        if _pct >= 0.8:
+            st.success(f"더존 iU 형식 감지됨 · {detected}/{total} 컬럼 자동 인식")
+        elif _pct >= 0.4:
+            st.warning(f"일부 컬럼 미감지 · {detected}/{total} 인식 · 아래에서 확인하세요")
+        else:
+            st.error(f"컬럼 자동 감지 실패 · {detected}/{total} · 수동 설정 필요")
+    with _badge_cols[1]:
+        if st.button("더존 iU 기본형식 적용", use_container_width=True):
+            for _k, _v in _DOOJOHN_PRESET.items():
+                if _v in opts:
+                    st.session_state[_k] = _v
+            st.rerun()
+
+    def _sel_val(key, auto_val):
+        """session_state에 preset이 있으면 우선 사용, 없으면 auto_detect 값 사용"""
+        return st.session_state.get(key, auto_val)
+
+    with st.expander("컬럼 매핑 확인 / 수정", expanded=(_pct < 0.8)):
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**기본 컬럼**")
-            sel_date     = st.selectbox("날짜 컬럼 *",    opts, index=col_index(opts, auto["date"]))
-            sel_time     = st.selectbox("시간 컬럼",      opts, index=col_index(opts, auto["time"]))
-            sel_amount   = st.selectbox("승인금액 컬럼",  opts, index=col_index(opts, auto["amount"]))
-            sel_merchant = st.selectbox("가맹점 컬럼",    opts, index=col_index(opts, auto["merchant"]))
-            sel_category = st.selectbox("업종 컬럼",      opts, index=col_index(opts, auto["category"]))
-            sel_card     = st.selectbox("법인카드 컬럼",  opts, index=col_index(opts, auto["card"]))
-            sel_user     = st.selectbox("소유자 컬럼",    opts, index=col_index(opts, auto["user"]))
-            sel_dept     = st.selectbox("관리부서 컬럼",  opts, index=col_index(opts, auto["dept"]))
+            sel_date     = st.selectbox("날짜 컬럼 *",    opts, key="sel_date",          index=col_index(opts, _sel_val("sel_date",          auto["date"])))
+            sel_time     = st.selectbox("시간 컬럼",      opts, key="sel_time",          index=col_index(opts, _sel_val("sel_time",          auto["time"])))
+            sel_amount   = st.selectbox("승인금액 컬럼",  opts, key="sel_amount",        index=col_index(opts, _sel_val("sel_amount",        auto["amount"])))
+            sel_merchant = st.selectbox("가맹점 컬럼",    opts, key="sel_merchant",      index=col_index(opts, _sel_val("sel_merchant",      auto["merchant"])))
+            sel_category = st.selectbox("업종 컬럼",      opts, key="sel_category",      index=col_index(opts, _sel_val("sel_category",      auto["category"])))
+            sel_card     = st.selectbox("법인카드 컬럼",  opts, key="sel_card",          index=col_index(opts, _sel_val("sel_card",          auto["card"])))
+            sel_user     = st.selectbox("소유자 컬럼",    opts, key="sel_user",          index=col_index(opts, _sel_val("sel_user",          auto["user"])))
+            sel_dept     = st.selectbox("관리부서 컬럼",  opts, key="sel_dept",          index=col_index(opts, _sel_val("sel_dept",          auto["dept"])))
         with c2:
             st.markdown("**더존 iUERP 전용 컬럼**")
-            sel_approval_type = st.selectbox("구분 컬럼 (승인/취소)",  opts, index=col_index(opts, auto["approval_type"]))
-            sel_approval_no   = st.selectbox("승인번호 컬럼",          opts, index=col_index(opts, auto["approval_no"]))
-            sel_biz_reg       = st.selectbox("사업자등록번호 컬럼",    opts, index=col_index(opts, auto["biz_reg"]))
-            sel_supply_amt    = st.selectbox("공급가액 컬럼",          opts, index=col_index(opts, auto["supply_amt"]))
-            sel_vat           = st.selectbox("부가세 컬럼",            opts, index=col_index(opts, auto["vat"]))
-            sel_service_fee   = st.selectbox("봉사료 컬럼",            opts, index=col_index(opts, auto["service_fee"]))
-            sel_cost_center   = st.selectbox("코스트센터명 컬럼",      opts, index=col_index(opts, auto["cost_center"]))
-            sel_account_name  = st.selectbox("상대계정명 컬럼",        opts, index=col_index(opts, auto["account_name"]))
-            sel_slip_status   = st.selectbox("전표처리 컬럼",          opts, index=col_index(opts, auto["slip_status"]))
+            sel_approval_type = st.selectbox("구분 컬럼 (승인/취소)",  opts, key="sel_approval_type", index=col_index(opts, _sel_val("sel_approval_type", auto["approval_type"])))
+            sel_approval_no   = st.selectbox("승인번호 컬럼",          opts, key="sel_approval_no",   index=col_index(opts, _sel_val("sel_approval_no",   auto["approval_no"])))
+            sel_biz_reg       = st.selectbox("사업자등록번호 컬럼",    opts, key="sel_biz_reg",        index=col_index(opts, _sel_val("sel_biz_reg",        auto["biz_reg"])))
+            sel_supply_amt    = st.selectbox("공급가액 컬럼",          opts, key="sel_supply_amt",     index=col_index(opts, _sel_val("sel_supply_amt",     auto["supply_amt"])))
+            sel_vat           = st.selectbox("부가세 컬럼",            opts, key="sel_vat",            index=col_index(opts, _sel_val("sel_vat",            auto["vat"])))
+            sel_service_fee   = st.selectbox("봉사료 컬럼",            opts, key="sel_service_fee",    index=col_index(opts, _sel_val("sel_service_fee",    auto["service_fee"])))
+            sel_cost_center   = st.selectbox("코스트센터명 컬럼",      opts, key="sel_cost_center",    index=col_index(opts, _sel_val("sel_cost_center",    auto["cost_center"])))
+            sel_account_name  = st.selectbox("상대계정명 컬럼",        opts, key="sel_account_name",   index=col_index(opts, _sel_val("sel_account_name",   auto["account_name"])))
+            sel_slip_status   = st.selectbox("전표처리 컬럼",          opts, key="sel_slip_status",    index=col_index(opts, _sel_val("sel_slip_status",    auto["slip_status"])))
 
     date_col         = to_none(sel_date)
     time_col         = to_none(sel_time)
