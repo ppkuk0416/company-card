@@ -128,50 +128,42 @@ def load_kr_holidays() -> set[str]:
 
 def detect_weekend_holiday(datetimes: pd.Series, kr_holidays: set[str]):
     DOW = ["월", "화", "수", "목", "금", "토", "일"]
-    flags, reasons = [], []
-    for dt in datetimes:
-        if pd.isna(dt):
-            flags.append(False); reasons.append(""); continue
-        dow = dt.dayofweek
-        if dow >= 5:
-            flags.append(True); reasons.append(f"주말({DOW[dow]}요일)")
-        elif str(dt.date()) in kr_holidays:
-            flags.append(True); reasons.append("공휴일")
-        else:
-            flags.append(False); reasons.append("")
-    return flags, reasons
+    valid    = datetimes.notna()
+    dow      = datetimes.dt.dayofweek
+    date_str = datetimes.dt.date.astype(str)
+    is_weekend = valid & (dow >= 5)
+    is_holiday = valid & ~is_weekend & date_str.isin(kr_holidays)
+    reasons = pd.Series("", index=datetimes.index, dtype=str)
+    for d in (5, 6):
+        m = is_weekend & (dow == d)
+        if m.any():
+            reasons[m] = f"주말({DOW[d]}요일)"
+    reasons[is_holiday] = "공휴일"
+    return (is_weekend | is_holiday).tolist(), reasons.tolist()
 
 def detect_late_night(datetimes: pd.Series, start_h: int = 22, end_h: int = 6):
-    flags, reasons = [], []
-    for dt in datetimes:
-        if pd.isna(dt):
-            flags.append(False); reasons.append(""); continue
-        h = dt.hour
-        if h >= start_h or h < end_h:
-            flags.append(True); reasons.append(f"심야/새벽({h:02d}:{dt.minute:02d})")
-        else:
-            flags.append(False); reasons.append("")
-    return flags, reasons
+    valid   = datetimes.notna()
+    h       = datetimes.dt.hour
+    is_late = valid & ((h >= start_h) | (h < end_h))
+    reasons = pd.Series("", index=datetimes.index, dtype=str)
+    reasons[is_late] = datetimes[is_late].dt.strftime("심야/새벽(%H:%M)")
+    return is_late.tolist(), reasons.tolist()
 
 def detect_suspicious(df: pd.DataFrame, merchant_col: str | None,
                       category_col: str | None, keywords: list[str]):
-    flags, reasons = [], []
-    for i in range(len(df)):
-        found, reason = False, ""
-        for col in (category_col, merchant_col):
-            if found or col is None:
-                break
-            val = df[col].iloc[i]
-            if pd.isna(val):
-                continue
-            val_str = str(val)
-            for kw in keywords:
-                if kw in val_str:
-                    label = "업종" if col == category_col else "가맹점"
-                    found, reason = True, f"{label}주의({kw})"
-                    break
-        flags.append(found); reasons.append(reason)
-    return flags, reasons
+    if not keywords:
+        return [False] * len(df), [""] * len(df)
+    pattern = "|".join(re.escape(k) for k in keywords)
+    flags   = pd.Series(False, index=df.index)
+    reasons = pd.Series("", index=df.index, dtype=str)
+    for col, label in [(category_col, "업종"), (merchant_col, "가맹점")]:
+        if col is None:
+            continue
+        matched = df[col].astype(str).str.extract(f"({pattern})", expand=False)
+        new_hit = matched.notna() & ~flags
+        reasons[new_hit] = label + "주의(" + matched[new_hit] + ")"
+        flags |= matched.notna()
+    return flags.tolist(), reasons.tolist()
 
 def detect_repeat(df: pd.DataFrame, amount_col: str, merchant_col: str,
                   date_col: str, window_days: int = 7, min_count: int = 2):
@@ -206,20 +198,11 @@ def detect_repeat(df: pd.DataFrame, amount_col: str, merchant_col: str,
     return flags, reasons
 
 def detect_high_amount(df: pd.DataFrame, amount_col: str, threshold: int):
-    flags, reasons = [], []
-    for val in df[amount_col]:
-        try:
-            amt = float(str(val).replace(",", "").strip())
-            if amt >= threshold:
-                flags.append(True)
-                reasons.append(f"고액거래({amt:,.0f}원)")
-            else:
-                flags.append(False)
-                reasons.append("")
-        except Exception:
-            flags.append(False)
-            reasons.append("")
-    return flags, reasons
+    amt     = pd.to_numeric(df[amount_col].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
+    flags   = amt >= threshold
+    reasons = pd.Series("", index=df.index, dtype=str)
+    reasons[flags] = amt[flags].apply(lambda x: f"고액거래({x:,.0f}원)")
+    return flags.tolist(), reasons.tolist()
 
 def detect_split_payment(df: pd.DataFrame, merchant_col: str, date_col: str,
                          min_count: int = 2):
@@ -436,7 +419,8 @@ def main():
             _result = _result[~mask_cancel].reset_index(drop=True)
         if _excluded_cancel:
             st.info(f"ℹ️ 취소 거래 **{_excluded_cancel:,}건** 제외 후 분석합니다.")
-        _datetimes = parse_datetimes(df, date_col, time_col)
+        # 취소 제외 후의 _result 기준으로 datetime 파싱
+        _datetimes = parse_datetimes(_result, date_col, time_col)
         _result["_dt_"] = _datetimes
         _flag_cols: list[str] = []
 
@@ -451,7 +435,7 @@ def main():
 
         if use_late_night:
             progress.progress(40, text="심야/새벽 탐지 중...")
-            if series_has_time(df, date_col, time_col):
+            if series_has_time(_result, date_col, time_col):
                 f, r = detect_late_night(_datetimes, late_start, late_end)
                 _result["심야_새벽"] = f
                 _result["심야_새벽_사유"] = r
@@ -461,28 +445,28 @@ def main():
 
         if use_suspicious and (merchant_col or category_col):
             progress.progress(60, text="유흥·사치성 업종 탐지 중...")
-            f, r = detect_suspicious(df, merchant_col, category_col, suspicious_keywords)
+            f, r = detect_suspicious(_result, merchant_col, category_col, suspicious_keywords)
             _result["유흥_사치성"] = f
             _result["유흥_사치성_사유"] = r
             _flag_cols.append("유흥_사치성")
 
         if use_repeat and merchant_col and amount_col:
             progress.progress(75, text="반복거래 탐지 중...")
-            f, r = detect_repeat(df, amount_col, merchant_col, date_col, repeat_window, repeat_min)
+            f, r = detect_repeat(_result, amount_col, merchant_col, date_col, repeat_window, repeat_min)
             _result["반복거래"] = f
             _result["반복거래_사유"] = r
             _flag_cols.append("반복거래")
 
         if use_high_amount and amount_col:
             progress.progress(85, text="고액 거래 탐지 중...")
-            f, r = detect_high_amount(df, amount_col, int(high_amount_threshold))
+            f, r = detect_high_amount(_result, amount_col, int(high_amount_threshold))
             _result["고액_거래"] = f
             _result["고액_거래_사유"] = r
             _flag_cols.append("고액_거래")
 
         if use_split and merchant_col:
             progress.progress(88, text="분할결제 탐지 중...")
-            f, r = detect_split_payment(df, merchant_col, date_col, split_min)
+            f, r = detect_split_payment(_result, merchant_col, date_col, split_min)
             _result["분할_결제"] = f
             _result["분할_결제_사유"] = r
             _flag_cols.append("분할_결제")
@@ -718,15 +702,25 @@ def main():
     show_cols.append("위험점수")
     show_cols = [c for c in show_cols if c in display.columns]
 
-    def row_style(row):
-        s = row["위험점수"] if "위험점수" in row.index else 0
-        if s >= 2:
-            return ["background-color: #fde8e8"] * len(row)
-        if s == 1:
-            return ["background-color: #fef9e7"] * len(row)
-        return [""] * len(row)
+    # ── 표시 행 수 제한 (브라우저 렌더링 부담 감소) ─────────────────────────
+    MAX_ROWS = 500
+    total_display = len(display)
+    if total_display > MAX_ROWS:
+        st.warning(
+            f"⚡ 표시 건수가 많아 상위 **{MAX_ROWS:,}건**만 미리봅니다. "
+            f"(전체 {total_display:,}건은 아래 엑셀로 다운로드하세요)"
+        )
+        display = display.head(MAX_ROWS)
 
-    # 금액 컬럼 콤마 포맷 (승인금액 + iUERP 공급가액/부가세/봉사료)
+    # ── 위험등급 컬럼만 배경색 적용 (행 전체 스타일링 대비 ~20× 빠름) ────────
+    def _grade_bg(s: pd.Series) -> list[str]:
+        return [
+            "background-color:#fde8e8" if "위험" in str(v) else
+            "background-color:#fef9e7" if "주의" in str(v) else ""
+            for v in s
+        ]
+
+    # 금액 컬럼 콤마 포맷
     _money_fmt = lambda x: (
         f"{float(str(x).replace(',', '')):,.0f}"
         if str(x) not in ("nan", "", "0") else "-"
@@ -736,8 +730,8 @@ def main():
         if _mc and _mc in show_cols:
             fmt[_mc] = _money_fmt
 
-    st.caption(f"표시 건수: {len(display):,}건")
-    styled = display[show_cols].style.apply(row_style, axis=1)
+    st.caption(f"표시 건수: {min(total_display, MAX_ROWS):,}건 / 전체 {total_display:,}건")
+    styled = display[show_cols].style.apply(_grade_bg, subset=["위험등급"])
     if fmt:
         styled = styled.format(fmt, na_rep="-")
     st.dataframe(styled, use_container_width=True, height=420, hide_index=True)
