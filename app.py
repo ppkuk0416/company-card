@@ -7,7 +7,7 @@ import plotly.express as px
 import streamlit as st
 from openpyxl.styles import Font, PatternFill
 
-APP_VERSION = "v2.1"
+APP_VERSION = "v2.2"
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
 # ─────────────────────────────────────────────────────────────────────────────
