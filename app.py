@@ -4,6 +4,7 @@ from datetime import datetime
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from openpyxl.styles import Font, PatternFill
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
 # ─────────────────────────────────────────────────────────────────────────────
@@ -412,13 +413,13 @@ def main():
         _result = df.copy()
 
         # 취소 거래 제외 (더존 iUERP '구분' 컬럼)
-        _excluded_cancel = 0
+        _cancelled_df = pd.DataFrame()
         if exclude_cancel and approval_type_col and approval_type_col in _result.columns:
             mask_cancel = _result[approval_type_col].astype(str).str.strip().isin(["취소", "취소(전체)", "CANCEL"])
-            _excluded_cancel = int(mask_cancel.sum())
+            _cancelled_df = _result[mask_cancel].copy()
             _result = _result[~mask_cancel].reset_index(drop=True)
-        if _excluded_cancel:
-            st.info(f"ℹ️ 취소 거래 **{_excluded_cancel:,}건** 제외 후 분석합니다.")
+        if len(_cancelled_df):
+            st.info(f"ℹ️ 취소 거래 **{len(_cancelled_df):,}건** 제외 후 분석합니다. (엑셀 내보내기 시 빨간색으로 표기)")
         # 취소 제외 후의 _result 기준으로 datetime 파싱
         _datetimes = parse_datetimes(_result, date_col, time_col)
         _result["_dt_"] = _datetimes
@@ -487,6 +488,7 @@ def main():
         # 분석 결과를 session_state에 저장 (필터 변경 시에도 유지)
         st.session_state["_cache"] = {
             "result": _result,
+            "cancelled": _cancelled_df,
             "flag_cols": _flag_cols,
             "cols": {
                 "date": date_col, "time": time_col, "amount": amount_col,
@@ -510,6 +512,7 @@ def main():
     # session_state에서 결과 복원
     cache            = st.session_state["_cache"]
     result           = cache["result"]
+    cancelled_df     = cache.get("cancelled", pd.DataFrame())
     flag_cols        = cache["flag_cols"]
     date_col         = cache["cols"]["date"]
     time_col         = cache["cols"]["time"]
@@ -737,17 +740,54 @@ def main():
     st.dataframe(styled, use_container_width=True, height=420, hide_index=True)
 
     st.subheader("📥 결과 다운로드")
-    export = result.drop(columns=["_dt_"], errors="ignore")
+
+    # ── 내보낼 컬럼 정리: bool 플래그·개별 사유 컬럼 제거 ──────────────────
+    _drop_cols = (
+        list(flag_cols) +                                          # True/False 플래그
+        [c for c in result.columns if c.endswith("_사유")] +      # 개별 사유 (이상사유로 통합)
+        ["_dt_"]
+    )
+    export = result.drop(columns=_drop_cols, errors="ignore")
+
+    # ── 취소거래: 내보내기용 컬럼만 맞춰 준비 ────────────────────────────────
+    has_cancelled = len(cancelled_df) > 0
+    if has_cancelled:
+        _cancel_export = cancelled_df.drop(
+            columns=[c for c in _drop_cols if c in cancelled_df.columns],
+            errors="ignore",
+        )
+        # 스크리닝 결과 컬럼(없는 경우) 빈 값으로 채우기
+        for col in ["위험등급", "이상사유", "위험점수"]:
+            if col not in _cancel_export.columns:
+                _cancel_export[col] = "취소"
+        # 전체결과용: 취소행 먼저, 승인행 뒤
+        full_export = pd.concat([_cancel_export, export], ignore_index=True)
+        n_cancel_rows = len(_cancel_export)
+    else:
+        full_export = export
+        n_cancel_rows = 0
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        export.to_excel(writer, sheet_name="전체결과", index=False)
+        full_export.to_excel(writer, sheet_name="전체결과", index=False)
         export[export["위험점수"] > 0].to_excel(writer, sheet_name="이상의심", index=False)
         export[export["위험점수"] >= 2].to_excel(writer, sheet_name="고위험", index=False)
         summary = pd.DataFrame({
-            "구분": ["총 거래건수", "이상 의심 건수", "고위험 건수", "이상 비율(%)"],
-            "값":   [total, flagged, high_risk, f"{flagged/total*100:.1f}%"],
+            "구분": ["총 거래건수", "취소 거래(제외)", "이상 의심 건수", "고위험 건수", "이상 비율(%)"],
+            "값":   [total + n_cancel_rows, n_cancel_rows, flagged, high_risk,
+                     f"{flagged/total*100:.1f}%" if total else "0%"],
         })
         summary.to_excel(writer, sheet_name="요약", index=False)
+
+        # ── 취소행 빨간 글씨 적용 (전체결과 시트) ────────────────────────────
+        if n_cancel_rows > 0:
+            ws = writer.sheets["전체결과"]
+            red_font = Font(color="FF0000", bold=False)
+            # 데이터는 2행부터 시작(1행=헤더), 취소행은 n_cancel_rows행까지
+            for row in ws.iter_rows(min_row=2, max_row=n_cancel_rows + 1):
+                for cell in row:
+                    cell.font = red_font
+
     buf.seek(0)
     st.download_button(
         label="📥 분석 결과 엑셀 다운로드",
