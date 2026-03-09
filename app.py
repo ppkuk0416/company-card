@@ -1,5 +1,6 @@
 import io
 import re
+from pathlib import Path
 from datetime import datetime
 import pandas as pd
 import plotly.express as px
@@ -895,7 +896,7 @@ def main():
     st.download_button(
         label="📥 분석 결과 엑셀 다운로드",
         data=buf.getvalue(),
-        file_name=f"법인카드_이상징후_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        file_name=f"{Path(uploaded.name).stem}_스크리닝.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
