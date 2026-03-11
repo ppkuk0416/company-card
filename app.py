@@ -7,6 +7,18 @@ import streamlit as st
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
+# ── openpyxl 구버전 xlsx 호환 패치 (xfid → xfId) ─────────────────────────────
+try:
+    from openpyxl.styles import cell_style as _cs
+    _orig_cs = _cs.CellStyle.__init__
+    def _cs_patched(self, *a, xfid=None, **kw):
+        if xfid is not None and "xfId" not in kw:
+            kw["xfId"] = xfid
+        _orig_cs(self, *a, **kw)
+    _cs.CellStyle.__init__ = _cs_patched
+except Exception:
+    pass
+
 APP_VERSION = "v2.3"
 # ─────────────────────────────────────────────────────────────────────────────
 # 9개 핵심 컬럼 키워드
@@ -368,11 +380,17 @@ def main():
                     df = pd.read_csv(uploaded, encoding=enc); uploaded.seek(0); break
                 except UnicodeDecodeError:
                     uploaded.seek(0)
-        else:
-            xl = pd.ExcelFile(uploaded)
+        elif uploaded.name.lower().endswith(".xls"):
+            xl = pd.ExcelFile(uploaded, engine="xlrd")
             sheet = (st.selectbox("시트 선택", xl.sheet_names)
                      if len(xl.sheet_names) > 1 else xl.sheet_names[0])
-            df = pd.read_excel(uploaded, sheet_name=sheet)
+            df = pd.read_excel(uploaded, sheet_name=sheet, engine="xlrd")
+        else:
+            xl = pd.ExcelFile(uploaded, engine="openpyxl")
+            sheet = (st.selectbox("시트 선택", xl.sheet_names)
+                     if len(xl.sheet_names) > 1 else xl.sheet_names[0])
+            uploaded.seek(0)
+            df = pd.read_excel(uploaded, sheet_name=sheet, engine="openpyxl")
     except Exception as e:
         st.error(f"파일 읽기 오류: {e}"); return
 
