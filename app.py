@@ -168,16 +168,16 @@ def detect_high_amount(df, amount_col, threshold):
     reasons[flags] = amt[flags].apply(lambda x: f"고액거래({x:,.0f}원)")
     return flags.tolist(), reasons.tolist()
 
-def detect_split_payment(df, merchant_col, date_col, min_count=2):
+def detect_split_payment(df, merchant_col, min_count=2):
     n = len(df)
     flags, reasons = [False]*n, [""]*n
     try:
         work = df.copy()
-        work["_d_"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+        work["_d_"] = df["_dt_"].dt.date          # parse_dt()로 이미 처리된 컬럼 사용
         work["_m_"] = df[merchant_col].astype(str).str.strip()
         work["_p_"] = range(n)
-        for (_, m), g in work.groupby(["_d_", "_m_"]):
-            if len(g) < min_count or m in ("nan",""):
+        for (d, m), g in work.groupby(["_d_", "_m_"]):
+            if len(g) < min_count or m in ("nan","") or pd.isna(d):
                 continue
             for idx in g.index:
                 p = work.loc[idx, "_p_"]
@@ -544,7 +544,7 @@ def main():
 
         if use_split and merchant_col:
             prog.progress(85, "분할결제 탐지 중...")
-            f, r = detect_split_payment(work, merchant_col, date_col, split_min)
+            f, r = detect_split_payment(work, merchant_col, split_min)
             work["분할_결제"] = f; work["분할_결제_사유"] = r
             flag_cols.append("분할_결제")
 
