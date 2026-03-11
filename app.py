@@ -379,6 +379,19 @@ def main():
     if df.empty:
         st.error("데이터가 없습니다."); return
 
+    # ── 더존 iUERP 전처리: NM_OWNER 헤더 행 / 소계 행 제거 ─────────────────
+    _before = len(df)
+    # NM_OWNER 행: 어느 컬럼이든 "NM_OWNER:" 문자열을 포함
+    _nm_mask = df.apply(lambda r: r.astype(str).str.contains("NM_OWNER:", na=False).any(), axis=1)
+    # 소계 행: 모든 컬럼이 NaN 이거나 빈 문자열 (숫자 합계 행)
+    _blank_mask = df.apply(
+        lambda r: r.map(lambda v: pd.isna(v) or str(v).strip() in ("", "nan")).all(), axis=1
+    )
+    df = df[~(_nm_mask | _blank_mask)].reset_index(drop=True)
+    _removed = _before - len(df)
+    if _removed > 0:
+        st.caption(f"ℹ️ iUERP 그룹 헤더·소계 행 {_removed}개 자동 제거")
+
     st.success(f"✅ 로드 완료: **{len(df):,}건** · **{len(df.columns)}개** 컬럼")
     with st.expander("📄 원본 데이터 미리보기 (상위 10행)"):
         st.dataframe(df.head(10), use_container_width=True, hide_index=True)
@@ -391,7 +404,7 @@ def main():
     # 더존 iUERP 기본 프리셋
     _PRESET = {
         "cm_dept": "관리부서", "cm_user": "소유자",
-        "cm_date": "승인일자", "cm_time": "(사용 안함)",
+        "cm_date": "승인일자", "cm_time": "승인시간",
         "cm_memo": "적요",     "cm_acct": "계정명",
         "cm_merch": "가맹점",  "cm_cat": "업종",
         "cm_amt": "승인금액",
